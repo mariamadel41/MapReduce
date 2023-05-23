@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"mime/multipart"
 	"net/http"
 	"os"
 )
@@ -15,13 +18,37 @@ func sendFileToMaster(filename string) error {
 	defer file.Close()
 
 	// Create a new HTTP POST request to the master endpoint
-	request, err := http.NewRequest("POST", "http://localhost:8080/upload", file)
+	request, err := http.NewRequest("POST", "http://localhost:8080/upload", nil)
 	if err != nil {
 		return err
 	}
 
-	// Set the appropriate content type for file uploads
-	request.Header.Set("Content-Type", "multipart/form-data")
+	// Create a new buffer to hold the request body
+	bodyBuffer := &bytes.Buffer{}
+
+	// Create a new multipart writer using the buffer
+	bodyWriter := multipart.NewWriter(bodyBuffer)
+
+	// Create a new form file field and add it to the multipart writer
+	fileWriter, err := bodyWriter.CreateFormFile("file", filename)
+	if err != nil {
+		return err
+	}
+
+	// Copy the contents of the file to the form file field
+	_, err = io.Copy(fileWriter, file)
+	if err != nil {
+		return err
+	}
+
+	// Close the multipart writer to finalize the request body
+	bodyWriter.Close()
+
+	// Set the request body to the buffer containing the multipart data
+	request.Body = ioutil.NopCloser(bodyBuffer)
+
+	// Set the content type header for the multipart request
+	request.Header.Set("Content-Type", bodyWriter.FormDataContentType())
 
 	// Send the request to the master
 	client := http.DefaultClient
@@ -43,7 +70,7 @@ func sendFileToMaster(filename string) error {
 
 func receiveResponseFromMaster() {
 	// Send a GET request to the master endpoint to receive the response
-	response, err := http.Get("http://localhost:8082/result")
+	response, err := http.Get("http://localhost:8080/result")
 	if err != nil {
 		fmt.Println("Failed to receive response from master:", err)
 		return
@@ -63,7 +90,7 @@ func receiveResponseFromMaster() {
 
 func main() {
 	// Specify the file to send to the master
-	filename := "path/to/your/file.txt"
+	filename := "D:\\4th-2\\Distrubuted\\MapReduce\\client\\sequence.txt"
 
 	// Send the file to the master
 	err := sendFileToMaster(filename)
