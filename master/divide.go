@@ -3,51 +3,80 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"net/http"
-	"strings"
+	"net"
+	"os"
+	"time"
 )
 
 func divideFile(fileData []byte) ([]byte, []byte) {
-	// Divide the fileData into two chunks
-	// You can define your own logic to split the file into chunks
+	// Calculate the length of the file data
+	fileLength := len(fileData)
+
+	// Divide the file data into two equal-sized chunks
+	halfLength := fileLength / 2
+	chunk1 := fileData[:halfLength]
+	chunk2 := fileData[halfLength:]
 
 	// Return the two chunks
 	return chunk1, chunk2
 }
 
-func sendToSlaves(chunk1 []byte, chunk2 []byte) {
-	// Send the chunks to the respective slaves
-	// You can define your own logic to send the chunks to slaves
+func sendToSlave(addr string, chunk []byte) error {
+	// Connect to the slave with a timeout of 5 seconds
+	conn, err := net.DialTimeout("tcp", addr, 500*time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	// Send the chunk to the slave
+	_, err = conn.Write(chunk)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func fileHandler(w http.ResponseWriter, r *http.Request) {
-	// Read the file data from the request
-	file, _, err := r.FormFile("file")
+func fileHandler() error {
+	// Open the sequence.txt file
+	file, err := os.Open("sequence.txt")
 	if err != nil {
-		http.Error(w, "Failed to read file", http.StatusBadRequest)
-		return
+		return err
 	}
 	defer file.Close()
 
+	// Read the file data into memory
 	fileData, err := ioutil.ReadAll(file)
 	if err != nil {
-		http.Error(w, "Failed to read file", http.StatusInternalServerError)
-		return
+		return err
 	}
 
-	// Divide the file into chunks
+	// Divide the file data into two chunks
 	chunk1, chunk2 := divideFile(fileData)
 
-	// Send the chunks to the slaves
-	sendToSlaves(chunk1, chunk2)
+	// Send chunk1 to Slave 1
+	err = sendToSlave("192.168.1.137:8081", chunk1)
+	if err != nil {
+		return err
+	}
 
-	fmt.Println("File divided and sent to slaves")
+	// Send chunk2 to Slave 2
+	err = sendToSlave("192.168.1.109:8082", chunk2)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func main() {
-	// Register the fileHandler function to handle file uploads
-	http.HandleFunc("/upload", fileHandler)
+	// Handle file uploads and sending chunks to slaves
+	err := fileHandler()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
 
-	// Start the server to listen for file uploads from the client
-	http.ListenAndServe(":8080", nil)
+	fmt.Println("File received and chunks sent to slaves successfully")
 }
