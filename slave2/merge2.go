@@ -10,7 +10,7 @@ import (
 
 func receiveChunk() error {
 	// Listen for incoming connections on port 8081
-	ln, err := net.Listen("tcp", ":8081")
+	ln, err := net.Listen("tcp", ":8082")
 	if err != nil {
 		return err
 	}
@@ -30,7 +30,7 @@ func receiveChunk() error {
 	}
 
 	// Save the received chunk to a file
-	err = ioutil.WriteFile("slave1_chunk.txt", chunk, 0644)
+	err = ioutil.WriteFile("slave2_chunk.txt", chunk, 0644)
 	if err != nil {
 		return err
 	}
@@ -59,7 +59,7 @@ func saveWordCount(wordCounts map[string]int) error {
 		content += fmt.Sprintf("%s,%d\n", word, count)
 	}
 
-	err := ioutil.WriteFile("word1_count.txt", []byte(content), 0644)
+	err := ioutil.WriteFile("word2_count.txt", []byte(content), 0644)
 	if err != nil {
 		return err
 	}
@@ -77,7 +77,7 @@ func sendCountToMaster() error {
 	defer conn.Close()
 
 	// Read the word count file
-	content, err := ioutil.ReadFile("word1_count.txt")
+	content, err := ioutil.ReadFile("word2_count.txt")
 	if err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func main() {
 	fmt.Println("Chunk received and saved successfully on Slave")
 
 	// Read the chunk from the file
-	filename := "slave1_chunk.txt" // Replace with the actual filename
+	filename := "slave2_chunk.txt" // Replace with the actual filename
 
 	content, err := ioutil.ReadFile(filename)
 	if err != nil {

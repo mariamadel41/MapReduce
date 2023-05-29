@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 )
@@ -20,12 +21,19 @@ func main() {
 	}
 	defer masterConn.Close()
 
-	buffer := make([]byte, 1024)
-	n, err := masterConn.Read(buffer)
+	// Receive the word count result file from the master
+	resultData, err := ioutil.ReadAll(masterConn)
 	if err != nil {
 		log.Fatalf("Failed to read result from master: %v", err)
 	}
 
-	result := string(buffer[:n])
-	fmt.Printf("Received result from master: %s\n", result)
+	// Save the word count result to a file
+	err = ioutil.WriteFile("word_count_result.txt", resultData, 0644)
+	if err != nil {
+		log.Fatalf("Failed to save result to file: %v", err)
+	}
+
+	// Display the word count result on the terminal
+	fmt.Println("Word count result:")
+	fmt.Println(string(resultData))
 }

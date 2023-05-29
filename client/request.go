@@ -90,7 +90,7 @@ func receiveResponseFromMaster() {
 
 func main() {
 	// Specify the file to send to the master
-	filename := "D:\\4th-2\\Distrubuted\\MapReduce\\client\\sequence.txt"
+	filename := "D:\\4th-2\\Distrubuted\\MapReduce\\client\\data.txt"
 
 	// Send the file to the master
 	err := sendFileToMaster(filename)
