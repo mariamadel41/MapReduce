@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,7 +25,9 @@ func divideFile(fileData []byte) ([]byte, []byte) {
 	return chunk1, chunk2
 }
 
-func sendToSlave(addr string, chunk []byte) error {
+func sendToSlave(addr string, chunk []byte, wg *sync.WaitGroup) error {
+	defer wg.Done()
+
 	// Connect to the slave with a timeout of 5 seconds
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
@@ -43,7 +46,7 @@ func sendToSlave(addr string, chunk []byte) error {
 
 func fileHandler() ([]byte, []byte, error) {
 	// Open the sequence.txt file
-	file, err := os.Open("sequence.txt")
+	file, err := os.Open("data.txt")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -61,25 +64,71 @@ func fileHandler() ([]byte, []byte, error) {
 	return chunk1, chunk2, nil
 }
 
-func handleSlaveConnection(conn net.Conn, wg *sync.WaitGroup, results chan<- int) {
-	defer wg.Done()
+func handleSlaveConnection(conn net.Conn, wg *sync.WaitGroup, results chan<- map[string]int) {
 	defer conn.Close()
 
-	// Read the character count from the slave
+	// Read the word count map from the slave
 	buffer := make([]byte, 1024)
 	n, err := conn.Read(buffer)
 	if err != nil {
-		log.Fatalf("Failed to read character count from slave: %v", err)
+		log.Fatalf("Failed to read word count from slave: %v", err)
 	}
 
-	// Parse the character count received from the slave
-	count, err := strconv.Atoi(string(buffer[:n]))
+	// Parse the word count map received from the slave
+	wordCount := make(map[string]int)
+	countStr := string(buffer[:n])
+	lines := strings.Split(countStr, "\n")
+	for _, line := range lines {
+		if line != "" {
+			parts := strings.Split(line, ",")
+			if len(parts) >= 2 {
+				word := strings.TrimSpace(parts[0])
+				countStr := strings.TrimSpace(parts[1])
+				if countStr != "" {
+					count, err := strconv.Atoi(countStr)
+					if err != nil {
+						log.Fatalf("Failed to parse word count from slave: %v", err)
+					}
+					wordCount[word] = count
+				}
+			}
+		}
+	}
+
+	// Send the word count map to the results channel
+	results <- wordCount
+}
+
+func saveWordCountToFile(wordCounts map[string]int) error {
+	content := ""
+	for word, count := range wordCounts {
+		content += fmt.Sprintf("%s,%d\n", word, count)
+	}
+
+	err := ioutil.WriteFile("reduce_result.txt", []byte(content), 0644)
 	if err != nil {
-		log.Fatalf("Failed to parse character count from slave: %v", err)
+		return err
 	}
 
-	// Send the character count to the results channel
-	results <- count
+	return nil
+}
+
+func sendResultToClient(clientAddr string, wordCounts map[string]int) error {
+	clientConn, err := net.Dial("tcp", clientAddr)
+	if err != nil {
+		return err
+	}
+	defer clientConn.Close()
+
+	for word, count := range wordCounts {
+		countStr := fmt.Sprintf("%s,%d\n", word, count)
+		_, err = clientConn.Write([]byte(countStr))
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func main() {
@@ -89,17 +138,18 @@ func main() {
 		log.Fatalf("Failed to handle file: %v", err)
 	}
 
+	// Create a WaitGroup to synchronize sending chunks to slaves
+	var wg sync.WaitGroup
+	wg.Add(2)
+
 	// Send chunk1 to Slave 1
-	err = sendToSlave("192.168.0.113:8081", chunk1)
-	if err != nil {
-		log.Fatalf("Failed to send chunk1 to Slave 1: %v", err)
-	}
+	go sendToSlave("192.168.0.102:8081", chunk1, &wg)
 
 	// Send chunk2 to Slave 2
-	err = sendToSlave("192.168.0.110:8082", chunk2)
-	if err != nil {
-		log.Fatalf("Failed to send chunk2 to Slave 2: %v", err)
-	}
+	go sendToSlave("192.168.0.102:8082", chunk2, &wg)
+
+	// Wait for the chunk sending to complete
+	wg.Wait()
 
 	// Start listening for slave connections
 	slaveListener, err := net.Listen("tcp", ":8000")
@@ -111,8 +161,8 @@ func main() {
 	// Accept connections from two slaves
 	fmt.Println("Waiting for slaves to connect...")
 	slaveCount := 0
-	var wg sync.WaitGroup
-	results := make(chan int, 2)
+	var wgSlaves sync.WaitGroup
+	results := make(chan map[string]int, 2)
 	for slaveCount < 2 {
 		slave, err := slaveListener.Accept()
 		if err != nil {
@@ -121,37 +171,42 @@ func main() {
 		fmt.Printf("Slave %d connected\n", slaveCount+1)
 
 		// Handle the slave connection concurrently
-		wg.Add(1)
-		go handleSlaveConnection(slave, &wg, results)
+		wgSlaves.Add(1)
+		go handleSlaveConnection(slave, &wgSlaves, results)
 		slaveCount++
 	}
 	// Wait for all slave connections to finish
-	wg.Wait()
+	wgSlaves.Wait()
 
-	// Collect the results from the channel
+	// Close the results channel after all slaves have sent their word counts
 	close(results)
-	totalCount := 0
-	for count := range results {
-		totalCount += count
+
+	// Combine the word count maps from all the slaves
+	totalCount := make(map[string]int)
+	for countMap := range results {
+		for word, count := range countMap {
+			totalCount[word] += count
+		}
 	}
 
-	fmt.Printf("Total character count: %d\n", totalCount)
+	fmt.Println("Word count from all slaves:")
+	for word, count := range totalCount {
+		fmt.Printf("%s, %d\n", word, count)
+	}
 
-	// Send the result to the client
-	clientAddr := "192.168.0.123:9000" // Replace with the actual client address
-
-	clientConn, err := net.Dial("tcp", clientAddr)
+	// Save the word count result to a file
+	err = saveWordCountToFile(totalCount)
 	if err != nil {
-		log.Fatalf("Failed to connect to client: %v", err)
+		log.Fatalf("Failed to save word count to file: %v", err)
 	}
-	defer clientConn.Close()
 
-	resultStr := strconv.Itoa(totalCount)
+	// Send the word count to the client
+	clientAddr := "192.168.0.103:9000" // Replace with the actual client address
 
-	_, err = clientConn.Write([]byte(resultStr))
+	err = sendResultToClient(clientAddr, totalCount)
 	if err != nil {
-		log.Fatalf("Failed to send result to client: %v", err)
+		log.Fatalf("Failed to send word count to client: %v", err)
 	}
 
-	fmt.Println("Result sent to the client")
+	fmt.Println("Word count sent to the client")
 }
